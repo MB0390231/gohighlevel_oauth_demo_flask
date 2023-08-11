@@ -69,6 +69,7 @@ class SQLiteDB:
         )
         self.conn.commit()
         print(f"Updated access token for locationId: {data['locationId']}")
+        return True
 
     def fetch_all_records(self, table_name):
         cursor = self.conn.cursor()
@@ -119,24 +120,32 @@ class SQLiteDB:
         self.conn.commit()
         return True
 
-    def attempt_contact_retrieval(self, phone_number, email, first_name, last_name):
-        query = f"""
+    def attempt_contact_retrieval(self, phone_number, email, first_name, last_name, location_id):
+        query_email_phone = f"""
             SELECT *
             FROM rgm_contacts
-            WHERE phone = ? OR email = ?
-            OR (phone IS NULL AND email IS NULL AND (firstName = ? AND lastName = ?));
+            WHERE (phone = ? OR email = ?) AND locationId = ?;
         """
         cursor = self.conn.cursor()
-        cursor.execute(query, (phone_number, email, first_name, last_name))
+        cursor.execute(query_email_phone, (phone_number, email, location_id))
 
         # Fetch the results
         results = cursor.fetchall()
 
-        # if there are no records, return None
-        if len(results) == 0:
-            return None
-        # if there are multiple records, return None
+        if len(results) != 0:
+            return results[0]
+
+        query_name = f"""
+            SELECT *
+            FROM rgm_contacts
+            WHERE (firstName = ? AND lastName = ?) and locationId = ?;
+        """
+        cursor.execute(query_name, (first_name, last_name, location_id))
+        results = cursor.fetchall()
+        if len(results) != 0:
+            return results[0]
+
         elif len(results) > 1:
             return None
 
-        return results[0]
+        return None

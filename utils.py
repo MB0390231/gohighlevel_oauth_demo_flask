@@ -104,7 +104,7 @@ def insert_all_contacts_into_db(location_id, api_key, limit=20):
     DB.insert_many_contacts(
         all_contacts,
     )
-
+    print(f"Inserted {len(all_contacts)} contacts into the database for location {location_id}")
     return all_contacts
 
 
@@ -113,8 +113,8 @@ def update_contacts_for_retailers():
     retailers = DB.fetch_all_records("rgm_retailers")
     for row in retailers:
         # 1. Get the locationId and lead data sheet link from the rgm_retailer table and api key from the api_data table
-
         location_id = row[0]
+        print(f"Querying for {location_id}")
         api_query = DB.fetch_single_record("api_data", "locationId", location_id)
         if not api_query:
             continue
@@ -122,8 +122,6 @@ def update_contacts_for_retailers():
 
         # 2. Pass in locationId and api key to the insert_all_contacts_into_db function
         insert_all_contacts_into_db(location_id, api_key, limit=100)
-
-        # 3. Pass in the lead data sheet link and the location_id to the update_lead_data_sheet function
     return True
 
 
@@ -132,26 +130,49 @@ def update_retailers_lead_data_sheets(google_client):
     retailers = DB.fetch_all_records("rgm_retailers")
     for row in retailers:
         # 1. get the lds_link from the rgm_retailers table
-
+        location_id = row[0]
         lds_link = row[1]
 
         lead_data_sheet = google_client.open_by_url(lds_link).get_worksheet(index=0)
-        contact_id_batch, location_id_batch = create_batch(lead_data_sheet.get_all_values())
-        update_location_contact_ids(
-            location_id_batch,
-            contact_id_batch,
-            lead_data_sheet,
+        worksheet_values = lead_data_sheet.get_all_values()
+
+        # map the headers
+        headers_mapping = {header.lower().rstrip(): index for index, header in enumerate(worksheet_values[0])}
+
+        # ensure the proper headers are present
+        missing_headers = verify_headers(
+            ["phone", "email", "first name", "last name", "contact id", "location id"], worksheet_values
         )
+        if missing_headers:
+            with open("missing_headers.txt", "a") as f:
+                # print and write out the list of missing headers from the missing_headers list of strings
+                f.write(f"Missing headers in location {location_id}, sheet {lds_link}, headers: {missing_headers}\n")
+                print(f"Missing headers in location {location_id}, sheet {lds_link}, headers: {missing_headers}")
+            continue
+
+        contact_id_batch, location_id_batch = create_batch(location_id, worksheet_values, headers_mapping)
+
+        update_location_contact_ids(location_id_batch, contact_id_batch, lead_data_sheet, location_id)
+        print(f"Updated location {location_id}")
     return True
 
 
-def create_batch(worksheet_values):
+def verify_headers(required_headers, worksheet_values):
+    """
+    required_headers: list of strings that should be in the headers
+    """
+    headers = [header.lower().rstrip() for header in worksheet_values[0]]
+    missing = []
+    for header in required_headers:
+        if header not in headers:
+            missing.append(header)
+    return missing
+
+
+def create_batch(location_id, worksheet_values, headers_mapping):
     """
     Use: the function takes in an unstructured list of lists and returns a list of lists with the necessary information to correlate contacts to the correct row in the lead data sheet
     """
-    # map the headers
-    headers_mapping = {header.lower().rstrip(): index for index, header in enumerate(worksheet_values[0])}
-
     # iterate through every row and attempt to correlate a contact to the row
     contact_id_batch = []
     location_id_batch = []
@@ -160,23 +181,33 @@ def create_batch(worksheet_values):
 
         phone_number = format_phone_number(row[headers_mapping["phone"]])
         email = row[headers_mapping["email"]].lower() if row[headers_mapping["email"]] else None
-        first_name = row[headers_mapping["first name"]]
-        last_name = row[headers_mapping["last name"]]
+        first_name = (
+            row[headers_mapping["first name"]].lower().rstrip() if row[headers_mapping["first name"]] else None
+        )
+        last_name = row[headers_mapping["last name"]].lower().rstrip() if row[headers_mapping["last name"]] else None
 
-        contact_record = DB.attempt_contact_retrieval(phone_number, email, first_name, last_name)
+        previous_contact_record = row[headers_mapping["contact id"]]
+        previous_location_record = row[headers_mapping["location id"]]
+
+        contact_record = DB.attempt_contact_retrieval(location_id, phone_number, email, first_name, last_name)
+
+        # check if there is already a contact id in the row
+        if previous_contact_record and previous_location_record:
+            contact_id_batch.append(previous_contact_record)
+            location_id_batch.append(previous_location_record)
+            continue
+
         # if there is a contact record, append the contact id and location id to the batch
         if contact_record:
-            contact_id = contact_record[0]
-            location_id = contact_record[1]
-            contact_id_batch.append(contact_id)
-            location_id_batch.append(location_id)
+            query_contact_id = contact_record[0]
+            query_location_id = contact_record[1]
+            contact_id_batch.append(query_contact_id)
+            location_id_batch.append(query_location_id)
         # if there is no contact record, append None to the batch
         else:
             contact_id_batch.append("")
             location_id_batch.append("")
-    print(
-        f"contact_id_batch: {len([c for c in contact_id_batch if c !=''])}\nlocation_id_batch: {len([l for l in location_id_batch if l !=''])}"
-    )
+
     return contact_id_batch, location_id_batch
 
 
@@ -193,7 +224,7 @@ def format_phone_number(phone_number):
     return None
 
 
-def update_location_contact_ids(location_id_batch, contact_id_batch, lds_sheet):
+def update_location_contact_ids(location_id_batch, contact_id_batch, lds_sheet, location_id):
     """
     Use: Take in a list of contact ids and a list of location ids and updates the columns in the lead data sheet with the correct contact ids
     """
@@ -222,4 +253,22 @@ def update_location_contact_ids(location_id_batch, contact_id_batch, lds_sheet):
             },
         ]
     )
+
+    empty_rows = []
+    for idx, contact_id in enumerate(contact_id_batch, start=1):
+        if contact_id == "":
+            empty_rows.append(idx)
+
+    consecutive_empty_rows = 0
+    with open("missing_contacts", "a") as f:
+        f.write(f"Location {location_id}\n")
+        for idx, contact_id in enumerate(contact_id_batch, start=1):
+            if contact_id == "":
+                consecutive_empty_rows += 1
+                f.write(f"  Row {idx + 1}\n")
+                if consecutive_empty_rows >= 3:
+                    break
+            else:
+                consecutive_empty_rows = 0
+
     return True
