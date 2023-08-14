@@ -149,3 +149,20 @@ class SQLiteDB:
             return None
 
         return None
+
+    def retailer_updated(self, location_id, status):
+        """
+        Status:
+        0 - Not updated
+        1 - Updated
+        2 - Error
+        """
+        query = f"""
+            UPDATE rgm_retailers
+            SET lds_updated = 1
+            WHERE locationId = ?;
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(query, (location_id,))
+        self.conn.commit()
+        return True
