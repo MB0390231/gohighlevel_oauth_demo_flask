@@ -1,14 +1,24 @@
 import requests
 from oauth_flask.config import CLIENT_ID, CLIENT_SECRET
 from oauth_flask.sqlite_db import SQLiteDB
+from requests.exceptions import JSONDecodeError
+from gspread.exceptions import APIError
+from time import sleep
+
+
+class RefreshTokenError(Exception):
+    pass
+
 
 DB = SQLiteDB()
 
 
 def verify_response(response):
     if "error" in response:
-        print(response)
-        return False
+        error = response["error"]
+        description = response["error_description"]
+        raise RefreshTokenError(description)
+
     return True
 
 
@@ -17,9 +27,13 @@ def refresh_tokens():
     data = DB.fetch_all_records("api_data")
 
     for row in data:
-        refresh_token = row[6]
-        refresh_one_token(refresh_token)
-
+        try:
+            refresh_token = row[6]
+            refresh_one_token(refresh_token)
+        # account for an empty response being sent back or an invalid refresh token
+        except (JSONDecodeError, RefreshTokenError) as e:
+            with open("errors/refresh_token.txt", "a") as f:
+                f.write(f"Error:\n  Location ID: {row[2]}\n Error: {e}\n")
     return True
 
 
@@ -132,8 +146,18 @@ def update_retailers_lead_data_sheets(google_client):
         # 1. get the lds_link from the rgm_retailers table
         location_id = row[0]
         lds_link = row[1]
+        updated = False if row[2] == 0 else True
 
-        lead_data_sheet = google_client.open_by_url(lds_link).get_worksheet(index=0)
+        # if already updated, skip
+        if updated:
+            continue
+
+        # 2. open the lead data sheet
+        lead_data_sheet = open_lds(google_client, lds_link, location_id)
+
+        if not lead_data_sheet:
+            continue
+
         worksheet_values = lead_data_sheet.get_all_values()
 
         # map the headers
@@ -144,16 +168,17 @@ def update_retailers_lead_data_sheets(google_client):
             ["phone", "email", "first name", "last name", "contact id", "location id"], worksheet_values
         )
         if missing_headers:
-            with open("missing_headers.txt", "a") as f:
+            with open("errors/missing_headers.txt", "a") as f:
                 # print and write out the list of missing headers from the missing_headers list of strings
                 f.write(f"Missing headers in location {location_id}, sheet {lds_link}, headers: {missing_headers}\n")
                 print(f"Missing headers in location {location_id}, sheet {lds_link}, headers: {missing_headers}")
+                DB.retailer_updated(location_id, 2)
             continue
 
         contact_id_batch, location_id_batch = create_batch(location_id, worksheet_values, headers_mapping)
 
         update_location_contact_ids(location_id_batch, contact_id_batch, lead_data_sheet, location_id)
-        print(f"Updated location {location_id}")
+        DB.retailer_updated(location_id, 1)
     return True
 
 
@@ -189,7 +214,7 @@ def create_batch(location_id, worksheet_values, headers_mapping):
         previous_contact_record = row[headers_mapping["contact id"]]
         previous_location_record = row[headers_mapping["location id"]]
 
-        contact_record = DB.attempt_contact_retrieval(location_id, phone_number, email, first_name, last_name)
+        contact_record = DB.attempt_contact_retrieval(phone_number, email, first_name, last_name, location_id)
 
         # check if there is already a contact id in the row
         if previous_contact_record and previous_location_record:
@@ -241,34 +266,51 @@ def update_location_contact_ids(location_id_batch, contact_id_batch, lds_sheet, 
     location_id_range = f"{chr(65 + location_id_column)}2:{chr(65 + location_id_column)}{len(location_id_batch) + 1}"
 
     # update the contact id column
-    lds_sheet.batch_update(
-        [
-            {
-                "range": contact_id_range,
-                "values": [[contact_id] for contact_id in contact_id_batch],
-            },
-            {
-                "range": location_id_range,
-                "values": [[location_id] for location_id in location_id_batch],
-            },
-        ]
-    )
-
-    empty_rows = []
-    for idx, contact_id in enumerate(contact_id_batch, start=1):
-        if contact_id == "":
-            empty_rows.append(idx)
-
-    consecutive_empty_rows = 0
-    with open("missing_contacts", "a") as f:
-        f.write(f"Location {location_id}\n")
-        for idx, contact_id in enumerate(contact_id_batch, start=1):
-            if contact_id == "":
-                consecutive_empty_rows += 1
-                f.write(f"  Row {idx + 1}\n")
-                if consecutive_empty_rows >= 3:
-                    break
-            else:
-                consecutive_empty_rows = 0
-
+    try:
+        lds_sheet.batch_update(
+            [
+                {
+                    "range": contact_id_range,
+                    "values": [[contact_id] for contact_id in contact_id_batch],
+                },
+                {
+                    "range": location_id_range,
+                    "values": [[location_id] for location_id in location_id_batch],
+                },
+            ]
+        )
+    except APIError as e:
+        code = e.args[0]["code"]
+        status = e.args[0]["status"]
+        if code == 429 and status == "RESOURCE_EXHAUSTED":
+            print("API Error: RESOURCE_EXHAUSTED sleeping for 100 seconds")
+            sleep(100)
+        else:
+            with open("errors/api_errors.txt", "a") as f:
+                f.write(f"Error: {e}\n Location ID: {location_id}\n")
+            print(f"Error: {e} Location ID: {location_id}")
+            return True
+    print(f"Location {location_id} updated")
     return True
+
+
+def open_lds(google_client, lds_link, location_id):
+    try:
+        lead_data_sheet = google_client.open_by_url(lds_link).get_worksheet(index=0)
+    except APIError as e:
+        code = e.args[0]["code"]
+        status = e.args[0]["status"]
+        if code == 429 and status == "RESOURCE_EXHAUSTED":
+            print("API Error: RESOURCE_EXHAUSTED sleeping for 100 seconds")
+            sleep(100)
+            return open_lds(google_client, lds_link, location_id)
+        elif code == 403 and status == "PERMISSION_DENIED":
+            with open("errors/api_errors.txt", "a") as f:
+                f.write(f"Error: {e}\n Location ID: {location_id}\n")
+                return False
+        else:
+            with open("errors/api_errors.txt", "a") as f:
+                f.write(f"Error: {e}\n Location ID: {location_id}\n")
+            print(f"Error: {e} Location ID: {location_id}")
+            return False
+    return lead_data_sheet
