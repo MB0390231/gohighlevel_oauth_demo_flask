@@ -1,6 +1,7 @@
 import sqlite3
 import threading
 from typing import Dict
+import json
 
 
 class SQLiteDB:
@@ -85,6 +86,17 @@ class SQLiteDB:
         cursor = self.conn.cursor()
         cursor.execute(f"SELECT {column_retreived} FROM {table_name} WHERE {column_query} = '{value}'")
         return cursor.fetchone()
+
+    def create_retailers_table(self):
+        query = """
+            CREATE TABLE IF NOT EXISTS rgm_retailers (
+                locationId TEXT PRIMARY KEY,
+                lds_link TEXT
+            );
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(query)
+        self.conn.commit()
 
     def insert_many_retailer_records(self, mds_data):
         # insert location id and mds_link into rgm_retailers table
