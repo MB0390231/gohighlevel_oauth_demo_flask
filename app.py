@@ -2,7 +2,7 @@ from flask import Flask, redirect, request, jsonify
 import requests
 from oauth_flask.utils import verify_response
 from urllib.parse import urlencode
-from oauth_flask.config import CLIENT_ID, CLIENT_SECRET, BASE_URL
+from oauth_flask.keys import CLIENT_ID, CLIENT_SECRET, BASE_URL
 from oauth_flask.sqlite_db import SQLiteDB
 
 app = Flask(__name__)
