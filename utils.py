@@ -4,6 +4,9 @@ from oauth_flask.sqlite_db import SQLiteDB
 from requests.exceptions import JSONDecodeError
 from gspread.exceptions import APIError
 from time import sleep
+import gspread
+
+from oauth_flask.keys import GoHighLevelConfig, GoogConfig
 
 
 class RefreshTokenError(Exception):
@@ -15,7 +18,7 @@ DB = SQLiteDB()
 
 def verify_response(response):
     if "error" in response:
-        error = response["error"]
+        print(response)
         description = response["error_description"]
         raise RefreshTokenError(description)
 
@@ -297,6 +300,7 @@ def update_location_contact_ids(location_id_batch, contact_id_batch, lds_sheet, 
 def open_lds(google_client, lds_link, location_id):
     try:
         lead_data_sheet = google_client.open_by_url(lds_link).get_worksheet(index=0)
+        worksheet_values = lead_data_sheet.get_all_values()
     except APIError as e:
         code = e.args[0]["code"]
         status = e.args[0]["status"]
@@ -313,4 +317,268 @@ def open_lds(google_client, lds_link, location_id):
                 f.write(f"Error: {e}\n Location ID: {location_id}\n")
             print(f"Error: {e} Location ID: {location_id}")
             return False
-    return lead_data_sheet
+    return lead_data_sheet, worksheet_values
+
+
+def write_missing_contact_location_id(google_client):
+    """
+    Runs though the lds_links for every retailer from the rgm_table and generates a list of rows that are missing contact and location IDs.
+    Creates a file named "missing_contacts.txt" and writes the results to that file.
+    Formats the txt as follows
+    Location ID: {locationId}, LDS Link: {lds_link}
+        Row: {row}, Contact First Name: {first_name}, Contact Last Name: {last_name}
+    """
+    retailers = DB.fetch_all_records("rgm_retailers")
+    for row in retailers:
+        total_missing = ""
+        lds_sheet, worksheet_values = open_lds(google_client, row[1], row[0])
+
+        if not lds_sheet:
+            continue
+
+        missing_contacts = determine_missing_contacts(worksheet_values)
+
+        total_missing += f"Location ID: {row[0]}, LDS Link: {row[1]}\n"
+        contacts_missing = ""
+        for contact in missing_contacts:
+            contacts_missing += (
+                f"  Row: {contact[0]}, Contact First Name: {contact[1]}, Contact Last Name: {contact[2]}\n"
+            )
+
+        if not contacts_missing:
+            continue
+        with open("info/errors/missing_contacts.txt", "a") as f:
+            f.write(total_missing + contacts_missing)
+        print(f"Location {row[0]} written")
+    return True
+
+
+def determine_missing_contacts(worksheet_values):
+    """
+    Runs through worksheet values and returns a list of lists of missing contacts
+    Returns list of lists with the following structure
+    [[row, first_name, last_name], [row, first_name, last_name]]
+    """
+    # create a mapping of the headers
+    headers_mapping = {header.lower().rstrip(): index for index, header in enumerate(worksheet_values[0])}
+
+    for index, row in enumerate(worksheet_values[1:], start=1):
+        # if the row doesn't have a value for "phone", "email", "first name", or "last name", skip
+        empty = True
+        for headers in ["phone", "email", "first name", "last name"]:
+            if row[headers_mapping[headers]] != "":
+                empty = False
+
+        if empty:
+            continue
+
+        contact_id = row[headers_mapping["contact id"]]
+        location_id = row[headers_mapping["location id"]]
+        first_name = row[headers_mapping["first name"]] if row[headers_mapping["first name"]] else ""
+        last_name = row[headers_mapping["last name"]] if row[headers_mapping["last name"]] else ""
+
+        # if test in the name or last name or the first and last name is "john" and "smith", skip
+        if "test" in first_name.lower() or "test" in last_name.lower():
+            continue
+        if first_name.lower() == "john" and last_name.lower() == "smith":
+            continue
+        if not contact_id and not location_id:
+            yield [index, first_name, last_name]
+    return None
+
+
+def count_missing_contact_location_id(google_client):
+    """
+    Runs though the lds_links for every retailer from the rgm_table and generates a list of rows that are missing contact and location IDs.
+    Creates a file named "missing_contacts.txt" and writes the results to that file.
+    Formats the txt as follows
+    Location ID: {locationId}, LDS Link: {lds_link}
+        Row: {row}, Contact First Name: {first_name}, Contact Last Name: {last_name}
+    """
+    retailers = DB.fetch_all_records("rgm_retailers")
+    for row in retailers:
+        lds_sheet, worksheet_values = open_lds(google_client, row[1], row[0])
+
+        if not lds_sheet:
+            continue
+
+        total_missing = f"Location ID: {row[0]}, LDS Link: {row[1]}\n"
+        contact_count = count_missing_contacts(worksheet_values)
+
+        if contact_count == 0:
+            continue
+        if contact_count > 20:
+            with open("info/errors/special_missing.txt", "a") as f:
+                f.write(total_missing + f"  Missing Contacts: {contact_count}\n")
+            print(f"Location {row[0]} written")
+        else:
+            with open("info/errors/missing_contacts_count.txt", "a") as f:
+                f.write(total_missing + f"  Missing Contacts: {contact_count}\n")
+            print(f"Location {row[0]} written")
+    return True
+
+
+def count_missing_contacts(worksheet_values):
+    """
+    Runs through worksheet values and returns a list of lists of missing contacts
+    Returns list of lists with the following structure
+    [[row, first_name, last_name], [row, first_name, last_name]]
+    """
+    # create a mapping of the headers
+    headers_mapping = {header.lower().rstrip(): index for index, header in enumerate(worksheet_values[0])}
+    count = 0
+    for index, row in enumerate(worksheet_values[1:], start=1):
+        # if the row doesn't have a value for "phone", "email", "first name", or "last name", skip
+        empty = True
+        for headers in ["phone", "email", "first name", "last name"]:
+            if row[headers_mapping[headers]] != "":
+                empty = False
+
+        if empty:
+            continue
+
+        contact_id = row[headers_mapping["contact id"]]
+        location_id = row[headers_mapping["location id"]]
+        first_name = row[headers_mapping["first name"]] if row[headers_mapping["first name"]] else ""
+        last_name = row[headers_mapping["last name"]] if row[headers_mapping["last name"]] else ""
+
+        # if test in the name or last name or the first and last name is "john" and "smith", skip
+        if "test" in first_name.lower() or "test" in last_name.lower():
+            continue
+        if first_name.lower() == "john" and last_name.lower() == "smith":
+            continue
+        if not contact_id and not location_id:
+            count += 1
+    return count
+
+
+import requests
+
+
+def get_opportunities(access_token, pipeline_id):
+    headers = {"Authorization": "Bearer {}".format(access_token)}
+    base_url = f"https://rest.gohighlevel.com/v1/pipelines/{pipeline_id}/opportunities?limit=100"
+    opportunities = []
+
+    while base_url:
+        response = requests.get(base_url, headers=headers)
+
+        if response.status_code == 200:
+            data = response.json()
+            opportunities.extend(data.get("opportunities", []))
+            next_page_url = data.get("meta", {}).get("nextPageUrl", None)
+            base_url = next_page_url
+        else:
+            print(response)
+            raise Exception("Failed to fetch opportunities. Status code: {}".format(response.status_code))
+
+    return opportunities
+
+
+def get_location_pipelines_from_ghl(access_token):
+    """
+    Uses the first version of the gohighlevel api to get pipelines
+    """
+
+    url = "https://rest.gohighlevel.com/v1/pipelines/"
+
+    payload = {}
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    response = requests.request("GET", url, headers=headers, data=payload)
+
+    return response.json()["pipelines"]
+
+
+def write_opportunity_data_to_sheets(lds_sheet, opportunities):
+    """
+    Batch updates a google sheet to update the opportunity data
+    """
+    lds_values = lds_sheet.get_all_values()
+    headers_mapping = {header.lower().rstrip(): index for index, header in enumerate(lds_values[0])}
+
+    batch_update = []
+    for row in lds_values[1:]:
+        contact_id = row[headers_mapping.get("contact id", "")]  # Handle missing header
+        if not contact_id:
+            batch_update.append([""])
+        else:
+            updated = False  # Track if an update is made for this row
+            for opportunity in opportunities:
+                if (
+                    "contact" in opportunity
+                    and "id" in opportunity["contact"]
+                    and opportunity["contact"]["id"] == contact_id
+                ):
+                    batch_update.append([opportunity.get("id", "")])
+                    updated = True
+                    break
+            if not updated:
+                batch_update.append([""])
+    if "opportunity id" not in headers_mapping:
+        opportunity_index = headers_mapping["processed"]
+        # use the header to figure out which column to update
+        opportunity_id_range = (
+            f"{chr(65 + opportunity_index-1)}2:{chr(65 + opportunity_index-1)}{len(batch_update) + 1}"
+        )
+        lds_sheet.insert_cols(values=[["Opportunity ID"]], col=opportunity_index)
+    else:
+        opportunity_id_range = f"{chr(65 + headers_mapping['opportunity id'])}2:{chr(65 + headers_mapping['opportunity id'])}{len(batch_update) + 1}"
+    lds_sheet.batch_update(
+        [
+            {
+                "range": opportunity_id_range,  # Update the range to a single column
+                "values": batch_update,
+            },
+        ]
+    )
+
+    return True
+
+
+def update_lds_opportunities(google_client=None):
+    if not google_client:
+        google_client = gspread.service_account_from_dict(GoogConfig.CREDENTIALS)
+    mds_data = google_client.open_by_key(GoogConfig.MDS_SHEET_ID).get_worksheet(index=0).get_all_values()
+
+    DB.create_retailers_table()
+    insert_sheets_retailer_data(mds_data)
+
+    # get locations from GoHighLevel using an agency token
+    access_token = GoHighLevelConfig.AGENCY_ACCESS_TOKEN
+    gohighlevel_locations = get_agency_locations_gohighlevel(access_token)
+
+    # run through the gohighlevel locations, if there is an mds_link in the rgm_retailers table for the locationID, update the lead data sheet
+    for location in gohighlevel_locations:
+        location_key = location["apiKey"]
+        location_id = location["id"]
+        mds_link = DB.fetch_single_column("rgm_retailers", "lds_link", "locationId", location_id)
+        # skip if no mds_link
+        if not mds_link:
+            continue
+
+        # get pipelines for the location
+        pipelines = get_location_pipelines_from_ghl(location_key)
+
+        # get opportunities for each pipeline
+        opportunities = [get_opportunities(location_key, pipeline["id"]) for pipeline in pipelines]
+
+        # flatten the list of lists
+        opportunities = [item for sublist in opportunities for item in sublist]
+        lds_sheet, _ = open_lds(google_client, mds_link[0], location_id)
+
+        # write the opportunity data to the lead data sheet
+        write_opportunity_data_to_sheets(lds_sheet, opportunities)
+        print(f"Updated Opps for Location: {location_id} LDS: {mds_link[0]}")
+    return True
+
+
+def get_agency_locations_gohighlevel(agency_access_token):
+    url = "https://rest.gohighlevel.com/v1/locations/"
+
+    payload = {}
+    headers = {"Authorization": f"Bearer {agency_access_token}"}
+
+    response = requests.request("GET", url, headers=headers, data=payload)
+    verify_response(response.json())
+    return response.json()["locations"]
