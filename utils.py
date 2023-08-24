@@ -1,4 +1,5 @@
 import requests
+import logging
 from oauth_flask.config import CLIENT_ID, CLIENT_SECRET
 from oauth_flask.sqlite_db import SQLiteDB
 from requests.exceptions import JSONDecodeError
@@ -7,6 +8,8 @@ from time import sleep
 import gspread
 
 from oauth_flask.keys import GoHighLevelConfig, GoogConfig
+
+logging.basicConfig(filename="error.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 class RefreshTokenError(Exception):
@@ -35,8 +38,7 @@ def refresh_tokens():
             refresh_one_token(refresh_token)
         # account for an empty response being sent back or an invalid refresh token
         except (JSONDecodeError, RefreshTokenError) as e:
-            with open("errors/refresh_token.txt", "a") as f:
-                f.write(f"Error:\n  Location ID: {row[2]}\n Error: {e}\n")
+            print(f"Error:\n  Location ID: {row[2]}\n Error: {e}")
     return True
 
 
@@ -72,7 +74,9 @@ def insert_sheets_retailer_data(mds_data):
     for row in mds_data[1:]:
         location_id = row[headers_mapping["ghl location id"]]
         lds_link = row[headers_mapping["lead data sheet link"]]
-        if lds_link == "" or location_id == "":
+        # active only
+        status = row[headers_mapping["status"]]
+        if lds_link == "" or location_id == "" or status == "Churned":
             continue
         values_to_insert.append((location_id, lds_link))
 
@@ -115,7 +119,7 @@ def insert_all_contacts_into_db(location_id, api_key, limit=20):
             meta = data.get("meta", {})
             next_page_url = meta.get("nextPageUrl")
         else:
-            print(f"Error: {response.status_code}")
+            print(f"Error: {response.text}")
             break
 
     DB.insert_many_contacts(
@@ -171,11 +175,9 @@ def update_retailers_lead_data_sheets(google_client):
             ["phone", "email", "first name", "last name", "contact id", "location id"], worksheet_values
         )
         if missing_headers:
-            with open("errors/missing_headers.txt", "a") as f:
-                # print and write out the list of missing headers from the missing_headers list of strings
-                f.write(f"Missing headers in location {location_id}, sheet {lds_link}, headers: {missing_headers}\n")
-                print(f"Missing headers in location {location_id}, sheet {lds_link}, headers: {missing_headers}")
-                DB.retailer_updated(location_id, 2)
+            # print and write out the list of missing headers from the missing_headers list of strings
+            print(f"Missing headers in location {location_id}, sheet {lds_link}, headers: {missing_headers}")
+            DB.retailer_updated(location_id, 2)
             continue
 
         contact_id_batch, location_id_batch = create_batch(location_id, worksheet_values, headers_mapping)
@@ -289,8 +291,6 @@ def update_location_contact_ids(location_id_batch, contact_id_batch, lds_sheet, 
             print("API Error: RESOURCE_EXHAUSTED sleeping for 100 seconds")
             sleep(100)
         else:
-            with open("errors/api_errors.txt", "a") as f:
-                f.write(f"Error: {e}\n Location ID: {location_id}\n")
             print(f"Error: {e} Location ID: {location_id}")
             return True
     print(f"Location {location_id} updated")
@@ -309,13 +309,9 @@ def open_lds(google_client, lds_link, location_id):
             sleep(100)
             return open_lds(google_client, lds_link, location_id)
         elif code == 403 and status == "PERMISSION_DENIED":
-            with open("errors/api_errors.txt", "a") as f:
-                f.write(f"Error: {e}\n Location ID: {location_id}\n")
-                return False
+            return False
         else:
-            with open("errors/api_errors.txt", "a") as f:
-                f.write(f"Error: {e}\n Location ID: {location_id}\n")
-            print(f"Error: {e} Location ID: {location_id}")
+            print(f"Error: {e}      Location ID: {location_id}")
             return False
     return lead_data_sheet, worksheet_values
 
@@ -347,8 +343,6 @@ def write_missing_contact_location_id(google_client):
 
         if not contacts_missing:
             continue
-        with open("info/errors/missing_contacts.txt", "a") as f:
-            f.write(total_missing + contacts_missing)
         print(f"Location {row[0]} written")
     return True
 
@@ -408,12 +402,8 @@ def count_missing_contact_location_id(google_client):
         if contact_count == 0:
             continue
         if contact_count > 20:
-            with open("info/errors/special_missing.txt", "a") as f:
-                f.write(total_missing + f"  Missing Contacts: {contact_count}\n")
             print(f"Location {row[0]} written")
         else:
-            with open("info/errors/missing_contacts_count.txt", "a") as f:
-                f.write(total_missing + f"  Missing Contacts: {contact_count}\n")
             print(f"Location {row[0]} written")
     return True
 
@@ -553,24 +543,40 @@ def update_lds_opportunities(google_client=None):
         location_key = location["apiKey"]
         location_id = location["id"]
         mds_link = DB.fetch_single_column("rgm_retailers", "lds_link", "locationId", location_id)
-        # skip if no mds_link
         if not mds_link:
             continue
 
-        # get pipelines for the location
-        pipelines = get_location_pipelines_from_ghl(location_key)
+        update_lds_with_opportunities(google_client, location_id, location_key, mds_link[0])
 
-        # get opportunities for each pipeline
-        opportunities = [get_opportunities(location_key, pipeline["id"]) for pipeline in pipelines]
+    return True
 
-        # flatten the list of lists
-        opportunities = [item for sublist in opportunities for item in sublist]
-        lds_sheet, _ = open_lds(google_client, mds_link[0], location_id)
+
+def update_lds_with_opportunities(google_client, location_id, location_key, mds_link):
+    # get pipelines for the location
+    pipelines = get_location_pipelines_from_ghl(location_key)
+
+    # get opportunities for each pipeline
+    opportunities = [get_opportunities(location_key, pipeline["id"]) for pipeline in pipelines]
+
+    # flatten the list of lists
+    opportunities = [item for sublist in opportunities for item in sublist]
+    try:
+        lds_sheet, _ = open_lds(google_client, mds_link, location_id)
 
         # write the opportunity data to the lead data sheet
         write_opportunity_data_to_sheets(lds_sheet, opportunities)
-        print(f"Updated Opps for Location: {location_id} LDS: {mds_link[0]}")
-    return True
+
+        info_message = f"Updated Opps for Location: {location_id} LDS: {mds_link}"
+        logging.info(info_message)
+        print(info_message)
+        DB.retailer_updated(location_id, 1)
+    except Exception as e:
+        print(f"Error updating Opps for Location: {location_id} LDS: {mds_link} Error: {e}")
+        error_message = f"Error updating Opps for Location: {location_id} LDS: {mds_link} Error: {e}"
+        logging.error(error_message)
+        print(error_message)
+        DB.retailer_updated(location_id, 2)
+        return True
 
 
 def get_agency_locations_gohighlevel(agency_access_token):
