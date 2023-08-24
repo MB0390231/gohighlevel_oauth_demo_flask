@@ -15,6 +15,7 @@ class SQLiteDB:
     def __init__(self, db_name: str = "oauth_flask/database.db"):
         self.local_storage = threading.local()
         self.db_name = db_name
+        self._create_database()
 
     @property
     def conn(self):
