@@ -12,7 +12,7 @@ class SQLiteDB:
             cls._instance = super(SQLiteDB, cls).__new__(cls, *args, **kwargs)
         return cls._instance
 
-    def __init__(self, db_name: str = "/Users/mb0390231/Desktop/RGM/GOHIGHLEVELAUTH/oauth_flask/database.db"):
+    def __init__(self, db_name: str = "oauth_flask/database.db"):
         self.local_storage = threading.local()
         self.db_name = db_name
 
