@@ -12,7 +12,7 @@ class SQLiteDB:
             cls._instance = super(SQLiteDB, cls).__new__(cls, *args, **kwargs)
         return cls._instance
 
-    def __init__(self, db_name: str = "oauth_flask/database.db"):
+    def __init__(self, db_name: str = "mds-clickup-sync/LDS-Opportunities/oauth_flask/database.db"):
         self.local_storage = threading.local()
         self.db_name = db_name
         self._create_database()
