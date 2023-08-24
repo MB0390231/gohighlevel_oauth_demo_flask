@@ -2,7 +2,7 @@ from flask import Flask, redirect, request, jsonify
 import requests
 from oauth_flask.utils import verify_response
 from urllib.parse import urlencode
-from oauth_flask.keys import CLIENT_ID, CLIENT_SECRET, BASE_URL
+from oauth_flask.keys import GoHighLevelConfig
 from oauth_flask.sqlite_db import SQLiteDB
 
 app = Flask(__name__)
@@ -11,7 +11,7 @@ db = SQLiteDB()
 
 @app.route("/initiate")
 def initiate_auth():
-    app_config = {"clientId": CLIENT_ID, "baseUrl": BASE_URL}
+    app_config = {"clientId": GoHighLevelConfig.CLIENT_ID, "baseUrl": GoHighLevelConfig.BASE_URL}
 
     options = {
         "requestType": "code",
@@ -33,7 +33,7 @@ def initiate_auth():
 
 @app.route("/oauth/callback")
 def handle_callback():
-    app_config = {"clientId": CLIENT_ID, "clientSecret": CLIENT_SECRET}
+    app_config = {"clientId": GoHighLevelConfig.CLIENT_ID, "clientSecret": GoHighLevelConfig.CLIENT_SECRET}
 
     data = {
         "client_id": app_config["clientId"],

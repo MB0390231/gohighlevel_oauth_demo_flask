@@ -40,3 +40,6 @@ class GoogConfig(Config):
 
 class GoHighLevelConfig(Config):
     AGENCY_ACCESS_TOKEN = os.environ.get("AGENCY_ACCESS_TOKEN")
+    BASE_URL = os.environ.get("BASE_URL")
+    CLIENT_ID = os.environ.get("CLIENT_ID")
+    CLIENT_SECRET = os.environ.get("CLIENT_SECRET")
