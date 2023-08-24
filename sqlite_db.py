@@ -1,7 +1,7 @@
 import sqlite3
 import threading
 from typing import Dict
-import json
+import os
 
 
 class SQLiteDB:
@@ -16,6 +16,11 @@ class SQLiteDB:
         self.local_storage = threading.local()
         self.db_name = db_name
         self._create_database()
+
+    def _create_database(self):
+        if not os.path.exists(self.db_name):
+            connection = sqlite3.connect(self.db_name)
+            connection.close()
 
     @property
     def conn(self):
