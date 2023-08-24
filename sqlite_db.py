@@ -91,7 +91,8 @@ class SQLiteDB:
         query = """
             CREATE TABLE IF NOT EXISTS rgm_retailers (
                 locationId TEXT PRIMARY KEY,
-                lds_link TEXT
+                lds_link TEXT,
+                lds_updated INTEGER DEFAULT 0
             );
         """
         cursor = self.conn.cursor()
@@ -171,10 +172,10 @@ class SQLiteDB:
         """
         query = f"""
             UPDATE rgm_retailers
-            SET lds_updated = 1
+            SET lds_updated = ?
             WHERE locationId = ?;
         """
         cursor = self.conn.cursor()
-        cursor.execute(query, (location_id,))
+        cursor.execute(query, (status, location_id))
         self.conn.commit()
-        return True
+        return
