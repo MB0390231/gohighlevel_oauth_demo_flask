@@ -7,9 +7,13 @@ from gspread.exceptions import APIError
 from time import sleep
 import gspread
 
-from oauth_flask.keys import GoHighLevelConfig, GoogConfig
+from clickup_python_sdk.api import ClickupClient
+from clickup_python_sdk.clickupobjects.list import List
+from oauth_flask.keys import GoHighLevelConfig, GoogConfig, ClickUpConfig
 
 logging.basicConfig(filename="error.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+CLICKUP_CLIENT = ClickupClient.init(ClickUpConfig.ACCESS_TOKEN)
 
 
 class RefreshTokenError(Exception):
@@ -545,9 +549,25 @@ def update_lds_opportunities(google_client=None):
         mds_link = DB.fetch_single_column("rgm_retailers", "lds_link", "locationId", location_id)
         if not mds_link:
             continue
+        try:
+            update_lds_with_opportunities(google_client, location_id, location_key, mds_link[0])
+        except Exception as e:
+            # prepare to create a clickup task
+            create_clickup_task(location_id, mds_link[0])
 
-        update_lds_with_opportunities(google_client, location_id, location_key, mds_link[0])
+    return True
 
+
+def create_clickup_task(location_id, mds_link):
+    title = "LDS-OPPORTUNITIES"
+    description = f"Sub-account: {location_id} LDS: {mds_link}"
+    # globals
+    parent_id = "8678m9y2r"
+    assignees = [57084868]
+    OPERATIONS = List(id=ClickUpConfig.OPERATIONS_LIST_ID)
+    OPERATIONS.create_task(
+        values={"name": title, "description": description, "assignees": assignees, "parent": parent_id}
+    )
     return True
 
 

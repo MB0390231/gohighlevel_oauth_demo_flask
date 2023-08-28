@@ -43,3 +43,8 @@ class GoHighLevelConfig(Config):
     BASE_URL = os.environ.get("BASE_URL")
     CLIENT_ID = os.environ.get("CLIENT_ID")
     CLIENT_SECRET = os.environ.get("CLIENT_SECRET")
+
+
+class ClickUpConfig(Config):
+    ACCESS_TOKEN = os.environ.get("CLICKUP_TOKEN")
+    OPERATIONS_LIST_ID = os.environ.get("OPERATIONS_LIST_ID")
