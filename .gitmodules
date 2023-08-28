@@ -1,0 +1,3 @@
+[submodule "clickup_python_sdk"]
+	path = clickup_python_sdk
+	url = https://github.com/MB0390231/clickup_python_sdk.git
