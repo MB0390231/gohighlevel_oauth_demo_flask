@@ -6,10 +6,19 @@ from requests.exceptions import JSONDecodeError
 from gspread.exceptions import APIError
 from time import sleep
 import gspread
+from oauth_flask.keys import GoHighLevelConfig, GoogConfig, ClickUpConfig
+
+import sys, os
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Navigate up two folders
+parent_dir = os.path.dirname(os.path.dirname(current_dir))
+print(parent_dir)
+sys.path.append(parent_dir)
 
 from clickup_python_sdk.api import ClickupClient
 from clickup_python_sdk.clickupobjects.list import List
-from oauth_flask.keys import GoHighLevelConfig, GoogConfig, ClickUpConfig
 
 logging.basicConfig(filename="error.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
