@@ -519,7 +519,7 @@ def write_opportunity_data_to_sheets(lds_sheet, opportunities):
             if not updated:
                 batch_update.append([""])
     if "opportunity id" not in headers_mapping:
-        opportunity_index = headers_mapping["processed"]
+        opportunity_index = headers_mapping["processed"] + 1
         # use the header to figure out which column to update
         opportunity_id_range = (
             f"{chr(65 + opportunity_index-1)}2:{chr(65 + opportunity_index-1)}{len(batch_update) + 1}"
