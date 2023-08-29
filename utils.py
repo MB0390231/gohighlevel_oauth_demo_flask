@@ -571,7 +571,7 @@ def create_clickup_task(location_id, mds_link):
     title = "LDS-OPPORTUNITIES"
     description = f"Sub-account: {location_id} LDS: {mds_link}"
     # globals
-    parent_id = "8678m9y2r"
+    parent_id = "8678qh5nd"
     assignees = [57084868]
     OPERATIONS = List(id=ClickUpConfig.OPERATIONS_LIST_ID)
     OPERATIONS.create_task(
