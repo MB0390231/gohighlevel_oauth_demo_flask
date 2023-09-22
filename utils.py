@@ -1,12 +1,12 @@
 import requests
 import logging
-from oauth_flask.config import CLIENT_ID, CLIENT_SECRET
-from oauth_flask.sqlite_db import SQLiteDB
+from gohighlevel_oauth_demo_flask.config import CLIENT_ID, CLIENT_SECRET
+from gohighlevel_oauth_demo_flask.sqlite_db import SQLiteDB
 from requests.exceptions import JSONDecodeError
 from gspread.exceptions import APIError
 from time import sleep
 import gspread
-from oauth_flask.keys import GoHighLevelConfig, GoogConfig, ClickUpConfig
+from gohighlevel_oauth_demo_flask.keys import GoHighLevelConfig, GoogConfig, ClickUpConfig
 
 import sys, os
 
